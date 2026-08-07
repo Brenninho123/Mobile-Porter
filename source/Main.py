@@ -102,15 +102,26 @@ class MobilePorter:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Mobile-Porter: port a desktop project to mobile")
-    parser.add_argument("source", help="Path to the source desktop project")
-    parser.add_argument("output", help="Path to write the ported project")
-    parser.add_argument("--platform", choices=["android", "ios"], required=True, help="Target mobile platform")
+    parser.add_argument("source", nargs="?", help="Path to the source desktop project")
+    parser.add_argument("output", nargs="?", help="Path to write the ported project")
+    parser.add_argument("--platform", choices=["android", "ios"], help="Target mobile platform")
     parser.add_argument("--assets-dir", default="assets", help="Relative path to the assets folder")
     return parser.parse_args()
 
 
+def run_menu():
+    from porter.menus.Menu import MainMenu
+    menu = MainMenu()
+    menu.run()
+
+
 def main():
     args = parse_args()
+
+    if not args.source or not args.output or not args.platform:
+        run_menu()
+        return
+
     porter = MobilePorter(args.source, args.output, args.platform, args.assets_dir)
 
     try:
