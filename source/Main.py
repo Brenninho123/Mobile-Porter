@@ -1,17 +1,67 @@
 import argparse
+import importlib.util
 import os
 import shutil
 import sys
+import time
 import xml.etree.ElementTree as ET
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+IO_DIR = os.path.join(CURRENT_DIR, "porter", "io")
+IMAGES_DIR = os.path.join(CURRENT_DIR, "porter", "images")
+MENUS_DIR = os.path.join(CURRENT_DIR, "porter", "menus")
+
+sys.path.insert(0, ROOT_DIR)
+
+
+def load_module(module_name, file_path):
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+Project = load_module("Project", os.path.join(ROOT_DIR, "Project.py"))
+ASTC = load_module("ASTC", os.path.join(IMAGES_DIR, "ASTC.py"))
+YmlFile = load_module("YmlFile", os.path.join(IO_DIR, "YmlFile.py"))
+Controls = load_module("Controls", os.path.join(IO_DIR, "Controls.py"))
+
+
+class Logger:
+    def __init__(self):
+        self.steps = []
+
+    def step(self, name, success, detail=""):
+        self.steps.append((name, success, detail))
+        status = "OK" if success else "FAILED"
+        print(f"[{status}] {name}" + (f" — {detail}" if detail else ""))
+
+    def summary(self):
+        print("\n" + "=" * 40)
+        print("Summary")
+        print("=" * 40)
+        for name, success, detail in self.steps:
+            status = "OK" if success else "FAILED"
+            print(f"{status}: {name}")
 
 
 class MobilePorter:
-    def __init__(self, source_path, output_path, platform, assets_dir):
+    def __init__(self, source_path, output_path, platform, assets_dir,
+                 convert_astc=True, generate_controls=True, generate_yml=True,
+                 astcenc_path="astcenc", block_size="6x6", quality="-medium"):
         self.source_path = os.path.abspath(source_path)
         self.output_path = os.path.abspath(output_path)
         self.platform = platform
         self.assets_dir = assets_dir
+        self.convert_astc = convert_astc
+        self.generate_controls = generate_controls
+        self.generate_yml = generate_yml
+        self.astcenc_path = astcenc_path
+        self.block_size = block_size
+        self.quality = quality
         self.project_type = None
+        self.logger = Logger()
 
     def detect_project_file(self):
         hxp_path = os.path.join(self.source_path, "project.hxp")
@@ -19,17 +69,15 @@ class MobilePorter:
 
         if os.path.isfile(hxp_path):
             self.project_type = "hxp"
-            return hxp_path
         elif os.path.isfile(xml_path):
             self.project_type = "xml"
-            return xml_path
         else:
             raise FileNotFoundError("No project.hxp or project.xml found in source project")
 
     def validate_source(self):
         if not os.path.isdir(self.source_path):
             raise FileNotFoundError(f"Source path not found: {self.source_path}")
-        return self.detect_project_file()
+        self.detect_project_file()
 
     def copy_project(self):
         if os.path.exists(self.output_path):
@@ -41,7 +89,7 @@ class MobilePorter:
         output_assets = os.path.join(self.output_path, self.assets_dir)
 
         if not os.path.isdir(source_assets):
-            print(f"Warning: assets folder not found at {source_assets}")
+            self.logger.step("Copy assets", False, "assets folder not found")
             return
 
         if os.path.exists(output_assets):
@@ -52,15 +100,19 @@ class MobilePorter:
             output_assets,
             ignore=shutil.ignore_patterns(".DS_Store", "Thumbs.db", "*.psd", "*.fla"),
         )
+        self.logger.step("Copy assets", True)
 
-    def patch_project_xml(self):
-        project_xml_path = os.path.join(self.output_path, "project.xml")
-        tree = ET.parse(project_xml_path)
-        root = tree.getroot()
+    def run_astc_conversion(self):
+        output_assets = os.path.join(self.output_path, self.assets_dir)
 
-        self.apply_platform_settings_xml(root)
-
-        tree.write(project_xml_path, encoding="utf-8", xml_declaration=True)
+        try:
+            converter = ASTC.ASTCConverter(
+                output_assets, output_assets, self.block_size, self.quality, self.astcenc_path
+            )
+            converter.run()
+            self.logger.step("ASTC conversion", True)
+        except Exception as error:
+            self.logger.step("ASTC conversion", False, str(error))
 
     def apply_platform_settings_xml(self, root):
         if self.platform == "android":
@@ -75,6 +127,15 @@ class MobilePorter:
         for key, value in attributes.items():
             element.set(key, value)
 
+    def patch_project_xml(self):
+        project_xml_path = os.path.join(self.output_path, "project.xml")
+        tree = ET.parse(project_xml_path)
+        root = tree.getroot()
+
+        self.apply_platform_settings_xml(root)
+
+        tree.write(project_xml_path, encoding="utf-8", xml_declaration=True)
+
     def patch_project_hxp(self):
         project_hxp_path = os.path.join(self.output_path, "project.hxp")
         with open(project_hxp_path, "r", encoding="utf-8") as file:
@@ -87,17 +148,58 @@ class MobilePorter:
         with open(project_hxp_path, "w", encoding="utf-8") as file:
             file.write(content)
 
+    def patch_project_file(self):
+        try:
+            if self.project_type == "xml":
+                self.patch_project_xml()
+            elif self.project_type == "hxp":
+                self.patch_project_hxp()
+            self.logger.step("Patch project file", True, self.project_type)
+        except Exception as error:
+            self.logger.step("Patch project file", False, str(error))
+
+    def run_controls_generation(self):
+        try:
+            generator = Controls.ControlsGenerator(self.output_path, Project.SOURCE_DIR)
+            generator.run()
+            self.logger.step("Generate mobile controls", True)
+        except Exception as error:
+            self.logger.step("Generate mobile controls", False, str(error))
+
+    def run_yml_generation(self):
+        yml_output = os.path.join(self.output_path, ".github", "workflows", "build.yml")
+        try:
+            generator = YmlFile.YmlFileGenerator(self.output_path, yml_output, Project.APP_TITLE)
+            generator.write()
+            self.logger.step("Generate CI YAML", True)
+        except Exception as error:
+            self.logger.step("Generate CI YAML", False, str(error))
+
     def run(self):
+        start_time = time.time()
+
         self.validate_source()
+        self.logger.step("Validate source", True, self.project_type)
+
         self.copy_project()
+        self.logger.step("Copy project", True)
+
         self.copy_assets()
 
-        if self.project_type == "xml":
-            self.patch_project_xml()
-        elif self.project_type == "hxp":
-            self.patch_project_hxp()
+        if self.convert_astc:
+            self.run_astc_conversion()
 
-        print(f"Ported project to {self.output_path} for platform: {self.platform} ({self.project_type})")
+        self.patch_project_file()
+
+        if self.generate_controls:
+            self.run_controls_generation()
+
+        if self.generate_yml:
+            self.run_yml_generation()
+
+        elapsed = time.time() - start_time
+        self.logger.summary()
+        print(f"\nPorted to {self.output_path} for {self.platform} in {elapsed:.2f}s")
 
 
 def parse_args():
@@ -105,13 +207,19 @@ def parse_args():
     parser.add_argument("source", nargs="?", help="Path to the source desktop project")
     parser.add_argument("output", nargs="?", help="Path to write the ported project")
     parser.add_argument("--platform", choices=["android", "ios"], help="Target mobile platform")
-    parser.add_argument("--assets-dir", default="assets", help="Relative path to the assets folder")
+    parser.add_argument("--assets-dir", default=Project.ASSETS_DIR, help="Relative path to the assets folder")
+    parser.add_argument("--no-astc", action="store_true", help="Skip ASTC texture conversion")
+    parser.add_argument("--no-controls", action="store_true", help="Skip mobile controls generation")
+    parser.add_argument("--no-yml", action="store_true", help="Skip CI YAML generation")
+    parser.add_argument("--astcenc-path", default="astcenc", help="Path to the astcenc executable")
+    parser.add_argument("--block-size", default="6x6", help="ASTC block size")
+    parser.add_argument("--quality", default="-medium", help="astcenc quality preset")
     return parser.parse_args()
 
 
 def run_menu():
-    from porter.menus.Menu import MainMenu
-    menu = MainMenu()
+    Menu = load_module("Menu", os.path.join(MENUS_DIR, "Menu.py"))
+    menu = Menu.MainMenu()
     menu.run()
 
 
@@ -122,7 +230,18 @@ def main():
         run_menu()
         return
 
-    porter = MobilePorter(args.source, args.output, args.platform, args.assets_dir)
+    porter = MobilePorter(
+        args.source,
+        args.output,
+        args.platform,
+        args.assets_dir,
+        convert_astc=not args.no_astc,
+        generate_controls=not args.no_controls,
+        generate_yml=not args.no_yml,
+        astcenc_path=args.astcenc_path,
+        block_size=args.block_size,
+        quality=args.quality,
+    )
 
     try:
         porter.run()
