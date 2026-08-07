@@ -3,7 +3,16 @@ name: Build MobilePorter
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
 
 jobs:
   build-windows:
@@ -16,7 +25,8 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
 
       - name: Install dependencies
         run: |
@@ -27,15 +37,24 @@ jobs:
       - name: Build executable
         run: pyinstaller --onefile --name "MobilePorter" source/Main.py
 
+      - name: Verify build output
+        run: |
+          if (-Not (Test-Path "dist/MobilePorter.exe")) {
+            Write-Error "Build failed: MobilePorter.exe not found"
+            exit 1
+          }
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MobilePorter (Windows)
           path: dist/MobilePorter.exe
+          if-no-files-found: error
+          retention-days: 30
 
   build-android:
     name: Build Android
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -43,26 +62,60 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Cache buildozer global
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            ~/.gradle
+          key: buildozer-global-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-global-${{ runner.os }}-
+
+      - name: Cache buildozer local
+        uses: actions/cache@v4
+        with:
+          path: .buildozer
+          key: buildozer-local-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-local-${{ runner.os }}-
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          sudo apt-get install -y \
+            git zip unzip openjdk-17-jdk python3-pip autoconf libtool \
+            pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev \
+            libtinfo6 cmake libffi-dev libssl-dev
 
       - name: Install buildozer
         run: |
           python -m pip install --upgrade pip
           pip install buildozer cython
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Prepare entrypoint
         run: cp source/Main.py source/main.py
 
       - name: Build APK
         run: buildozer -v android debug
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+
+      - name: Verify build output
+        run: |
+          if [ -z "$(find bin -name '*.apk' 2>/dev/null)" ]; then
+            echo "Build failed: no APK found in bin/"
+            exit 1
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MobilePorter (Android)
           path: bin/*.apk
+          if-no-files-found: error
+          retention-days: 30
