@@ -4,7 +4,7 @@ PACKAGE = "com.brenninho.mobileporter"
 VERSION = "1.0.0"
 COMPANY = "Brenninho"
 
-ICON_PATH = "icon.png"
+ICON_PATH = "assets/icon/icon.png"
 
 ORIENTATION = "portrait"
 FULLSCREEN = True
