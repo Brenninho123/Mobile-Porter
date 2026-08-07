@@ -3,6 +3,7 @@ name: Build MobilePorter
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -34,8 +35,11 @@ jobs:
           pip install pyinstaller
           if (Test-Path requirements.txt) { pip install -r requirements.txt }
 
+      - name: Prepare Windows spec
+        run: python source/Main.py --prepare-windows
+
       - name: Build executable
-        run: pyinstaller --onefile --name "MobilePorter" source/Main.py
+        run: pyinstaller --noconfirm mobileporter.spec
 
       - name: Verify build output
         run: |
@@ -101,7 +105,7 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Build APK
-        run: buildozer -v android debug
+        run: yes | buildozer -v android debug
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
 
