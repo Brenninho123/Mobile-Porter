@@ -38,6 +38,9 @@ ASTC = load_module("ASTC", os.path.join(IMAGES_DIR, "ASTC.py"))
 YmlFile = load_module("YmlFile", os.path.join(IO_DIR, "YmlFile.py"))
 Controls = load_module("Controls", os.path.join(IO_DIR, "Controls.py"))
 
+WINLATOR_SHORTCUT_PATH = os.path.join(ROOT_DIR, f"{Project.PACKAGE_NAME}.desktop")
+WINLATOR_EXE_CONTAINER_PATH = f"C:\\{Project.APP_TITLE}\\{Project.APP_TITLE}.exe"
+
 
 def get_mobile_storage_dir():
     private_dir = os.environ.get("ANDROID_PRIVATE")
@@ -317,7 +320,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='{Project.APP_FILE}',
+    name='MobilePorter',
     console=True,
 {icon_line}
 )
@@ -360,6 +363,33 @@ def ensure_ios_script(force=False):
     print(f"Generated build_ios.sh at {IOS_BUILD_SCRIPT_PATH}")
 
 
+def build_winlator_shortcut_content():
+    return f"""[Desktop Entry]
+Name={Project.APP_TITLE}
+Exec=wine "{WINLATOR_EXE_CONTAINER_PATH}"
+Icon={Project.PACKAGE_NAME}
+Type=Application
+StartupWMClass={Project.APP_TITLE.lower().replace(" ", "")}.exe
+
+[Extra Data]
+dxwrapper=wined3d
+forceFullscreen=0
+"""
+
+
+def ensure_winlator_shortcut(force=False):
+    if os.path.isfile(WINLATOR_SHORTCUT_PATH) and not force:
+        print(f"Detected existing shortcut at {WINLATOR_SHORTCUT_PATH}")
+        return
+
+    with open(WINLATOR_SHORTCUT_PATH, "w", encoding="utf-8") as file:
+        file.write(build_winlator_shortcut_content())
+
+    print(f"Generated Winlator shortcut at {WINLATOR_SHORTCUT_PATH}")
+    print(f"Copy MobilePorter.exe into the container at {WINLATOR_EXE_CONTAINER_PATH}")
+    print("Then place this .desktop file in the container's shortcut directory, or use 'Create Shortcut' on the .exe inside Winlator's file manager and adjust the path to match.")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Mobile-Porter: port a desktop project to mobile")
     parser.add_argument("source", nargs="?", help="Path to the source desktop project")
@@ -375,6 +405,7 @@ def parse_args():
     parser.add_argument("--prepare-android", action="store_true", help="Detect or generate buildozer.spec and root main.py, then exit")
     parser.add_argument("--prepare-windows", action="store_true", help="Detect or generate mobileporter.spec for PyInstaller, then exit")
     parser.add_argument("--prepare-ios", action="store_true", help="Detect or generate build_ios.sh for kivy-ios, then exit")
+    parser.add_argument("--prepare-winlator", action="store_true", help="Generate a Winlator .desktop shortcut for the Windows build, then exit")
     parser.add_argument("--force-spec", action="store_true", help="Regenerate the target spec/script even if it already exists")
     return parser.parse_args()
 
@@ -454,6 +485,10 @@ def main():
 
     if args.prepare_ios:
         ensure_ios_script(force=args.force_spec)
+        return
+
+    if args.prepare_winlator:
+        ensure_winlator_shortcut(force=args.force_spec)
         return
 
     if ON_IOS:
