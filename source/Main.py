@@ -1,4 +1,5 @@
 import argparse
+import ctypes
 import importlib.util
 import json
 import os
@@ -14,9 +15,29 @@ IO_DIR = os.path.join(CURRENT_DIR, "porter", "io")
 IMAGES_DIR = os.path.join(CURRENT_DIR, "porter", "images")
 MENUS_DIR = os.path.join(CURRENT_DIR, "porter", "menus")
 
+
+def is_running_under_wine():
+    try:
+        ntdll = ctypes.windll.ntdll
+        return hasattr(ntdll, "wine_get_version")
+    except (AttributeError, OSError):
+        return False
+
+
+def is_running_under_winlator():
+    if not is_running_under_wine():
+        return False
+
+    wineprefix = os.environ.get("WINEPREFIX", "")
+    markers = ["winlator", "imagefs", "xuser"]
+
+    return any(marker in wineprefix.lower() for marker in markers)
+
+
 ON_ANDROID = "ANDROID_ARGUMENT" in os.environ
 ON_IOS = sys.platform == "ios" or "IOS_IS_WINDOWED" in os.environ
-ON_WINDOWS = platform.system() == "Windows" and not ON_ANDROID and not ON_IOS
+ON_WINLATOR = platform.system() == "Windows" and is_running_under_winlator()
+ON_WINDOWS = platform.system() == "Windows" and not ON_ANDROID and not ON_IOS and not ON_WINLATOR
 
 BUILDOZER_SPEC_PATH = os.path.join(ROOT_DIR, "buildozer.spec")
 ROOT_MAIN_PATH = os.path.join(ROOT_DIR, "main.py")
@@ -42,6 +63,18 @@ WINLATOR_SHORTCUT_PATH = os.path.join(ROOT_DIR, f"{Project.PACKAGE_NAME}.desktop
 WINLATOR_EXE_CONTAINER_PATH = f"C:\\{Project.APP_TITLE}\\{Project.APP_TITLE}.exe"
 
 
+def get_current_platform_name():
+    if ON_IOS:
+        return "ios"
+    if ON_ANDROID:
+        return "android"
+    if ON_WINLATOR:
+        return "winlator"
+    if ON_WINDOWS:
+        return "windows"
+    return platform.system().lower()
+
+
 def get_mobile_storage_dir():
     private_dir = os.environ.get("ANDROID_PRIVATE")
     if private_dir:
@@ -49,6 +82,10 @@ def get_mobile_storage_dir():
 
     if ON_IOS:
         return os.path.join(os.path.expanduser("~"), "Documents", "mobileporter")
+
+    if ON_WINLATOR:
+        exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        return exe_dir
 
     return os.path.join(os.path.expanduser("~"), ".mobileporter")
 
@@ -194,7 +231,7 @@ class MobilePorter:
 
     def run_controls_generation(self):
         try:
-            generator = Controls.ControlsGenerator(self.output_path, Project.SOURCE_DIR)
+            generator = Controls.ControlsGenerator(self.output_path, Project.SOURCE_DIR, self.assets_dir)
             generator.run()
             self.logger.step("Generate mobile controls", True)
         except Exception as error:
@@ -390,6 +427,38 @@ def ensure_winlator_shortcut(force=False):
     print("Then place this .desktop file in the container's shortcut directory, or use 'Create Shortcut' on the .exe inside Winlator's file manager and adjust the path to match.")
 
 
+def print_banner():
+    title_line = f" {Project.APP_TITLE} v{Project.VERSION} "
+    width = max(len(title_line) + 4, 40)
+    print("=" * width)
+    print(title_line.center(width))
+    print(f" by {Project.COMPANY} ".center(width))
+    print("=" * width)
+
+
+def run_startup_checks():
+    checks = []
+
+    python_ok = sys.version_info >= (3, 8)
+    checks.append(("Python version", python_ok, platform.python_version()))
+
+    project_ok = bool(Project.APP_TITLE) and bool(Project.PACKAGE)
+    checks.append(("Project.py config", project_ok, Project.PACKAGE))
+
+    icon_path = os.path.join(ROOT_DIR, Project.ICON_PATH) if Project.ICON_PATH else None
+    icon_ok = icon_path is not None and os.path.isfile(icon_path)
+    checks.append(("Icon asset", icon_ok, Project.ICON_PATH or "not set"))
+
+    checks.append(("Platform detected", True, get_current_platform_name()))
+
+    for name, ok, detail in checks:
+        status = "OK" if ok else "WARN"
+        print(f"[{status}] {name}: {detail}")
+
+    print("")
+    return all(ok for _, ok, _ in checks[:3])
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Mobile-Porter: port a desktop project to mobile")
     parser.add_argument("source", nargs="?", help="Path to the source desktop project")
@@ -407,6 +476,7 @@ def parse_args():
     parser.add_argument("--prepare-ios", action="store_true", help="Detect or generate build_ios.sh for kivy-ios, then exit")
     parser.add_argument("--prepare-winlator", action="store_true", help="Generate a Winlator .desktop shortcut for the Windows build, then exit")
     parser.add_argument("--force-spec", action="store_true", help="Regenerate the target spec/script even if it already exists")
+    parser.add_argument("--no-banner", action="store_true", help="Skip the startup banner and environment checks")
     return parser.parse_args()
 
 
@@ -472,6 +542,10 @@ def run_ios():
     run_mobile_config("ios", "ios")
 
 
+def run_winlator():
+    run_mobile_config("winlator", "android")
+
+
 def main():
     args = parse_args()
 
@@ -498,6 +572,14 @@ def main():
     if ON_ANDROID:
         run_android()
         return
+
+    if ON_WINLATOR:
+        run_winlator()
+        return
+
+    if not args.no_banner:
+        print_banner()
+        run_startup_checks()
 
     if not args.source or not args.output or not args.platform:
         run_menu()
