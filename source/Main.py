@@ -1,5 +1,6 @@
 import argparse
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -11,6 +12,8 @@ ROOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 IO_DIR = os.path.join(CURRENT_DIR, "porter", "io")
 IMAGES_DIR = os.path.join(CURRENT_DIR, "porter", "images")
 MENUS_DIR = os.path.join(CURRENT_DIR, "porter", "menus")
+
+ON_ANDROID = "ANDROID_ARGUMENT" in os.environ
 
 sys.path.insert(0, ROOT_DIR)
 
@@ -28,28 +31,44 @@ YmlFile = load_module("YmlFile", os.path.join(IO_DIR, "YmlFile.py"))
 Controls = load_module("Controls", os.path.join(IO_DIR, "Controls.py"))
 
 
+def get_android_storage_dir():
+    private_dir = os.environ.get("ANDROID_PRIVATE")
+    if private_dir:
+        return private_dir
+    return os.path.join(os.path.expanduser("~"), ".mobileporter")
+
+
 class Logger:
-    def __init__(self):
+    def __init__(self, log_file=None):
         self.steps = []
+        self.log_file = log_file
+
+    def emit(self, message):
+        if self.log_file:
+            with open(self.log_file, "a", encoding="utf-8") as file:
+                file.write(message + "\n")
+        else:
+            print(message)
 
     def step(self, name, success, detail=""):
         self.steps.append((name, success, detail))
         status = "OK" if success else "FAILED"
-        print(f"[{status}] {name}" + (f" — {detail}" if detail else ""))
+        self.emit(f"[{status}] {name}" + (f" — {detail}" if detail else ""))
 
     def summary(self):
-        print("\n" + "=" * 40)
-        print("Summary")
-        print("=" * 40)
+        self.emit("\n" + "=" * 40)
+        self.emit("Summary")
+        self.emit("=" * 40)
         for name, success, detail in self.steps:
             status = "OK" if success else "FAILED"
-            print(f"{status}: {name}")
+            self.emit(f"{status}: {name}")
 
 
 class MobilePorter:
     def __init__(self, source_path, output_path, platform, assets_dir,
                  convert_astc=True, generate_controls=True, generate_yml=True,
-                 astcenc_path="astcenc", block_size="6x6", quality="-medium"):
+                 astcenc_path="astcenc", block_size="6x6", quality="-medium",
+                 logger=None):
         self.source_path = os.path.abspath(source_path)
         self.output_path = os.path.abspath(output_path)
         self.platform = platform
@@ -61,7 +80,7 @@ class MobilePorter:
         self.block_size = block_size
         self.quality = quality
         self.project_type = None
-        self.logger = Logger()
+        self.logger = logger if logger else Logger()
 
     def detect_project_file(self):
         hxp_path = os.path.join(self.source_path, "project.hxp")
@@ -199,7 +218,7 @@ class MobilePorter:
 
         elapsed = time.time() - start_time
         self.logger.summary()
-        print(f"\nPorted to {self.output_path} for {self.platform} in {elapsed:.2f}s")
+        self.logger.emit(f"\nPorted to {self.output_path} for {self.platform} in {elapsed:.2f}s")
 
 
 def parse_args():
@@ -223,7 +242,59 @@ def run_menu():
     menu.run()
 
 
+def run_android():
+    storage_dir = get_android_storage_dir()
+    os.makedirs(storage_dir, exist_ok=True)
+
+    config_path = os.path.join(storage_dir, "android_config.json")
+    log_path = os.path.join(storage_dir, "mobileporter.log")
+
+    logger = Logger(log_file=log_path)
+
+    if not os.path.isfile(config_path):
+        default_config = {
+            "source": "",
+            "output": "",
+            "platform": "android",
+            "assets_dir": Project.ASSETS_DIR,
+            "convert_astc": True,
+            "generate_controls": True,
+            "generate_yml": True,
+        }
+        with open(config_path, "w", encoding="utf-8") as file:
+            json.dump(default_config, file, indent=4)
+        logger.step("Create default config", True, config_path)
+        return
+
+    with open(config_path, "r", encoding="utf-8") as file:
+        config = json.load(file)
+
+    if not config.get("source") or not config.get("output"):
+        logger.step("Read config", False, "source or output missing in android_config.json")
+        return
+
+    porter = MobilePorter(
+        config["source"],
+        config["output"],
+        config.get("platform", "android"),
+        config.get("assets_dir", Project.ASSETS_DIR),
+        convert_astc=config.get("convert_astc", True),
+        generate_controls=config.get("generate_controls", True),
+        generate_yml=config.get("generate_yml", True),
+        logger=logger,
+    )
+
+    try:
+        porter.run()
+    except Exception as error:
+        logger.step("Run porter", False, str(error))
+
+
 def main():
+    if ON_ANDROID:
+        run_android()
+        return
+
     args = parse_args()
 
     if not args.source or not args.output or not args.platform:
