@@ -21,19 +21,20 @@ class YmlFileGenerator:
         else:
             raise FileNotFoundError("No project.hxp or project.xml found in source project")
 
-    def build_commands(self, platform):
+    def build_command(self, platform):
         if self.project_type == "hxp":
-            return [
-                "haxe --run project.hxp build " + platform,
-            ]
-        else:
-            return [
-                f"lime build {platform}",
-            ]
+            return f"haxe --run project.hxp build {platform}"
+        return f"lime build {platform}"
+
+    def output_glob(self, platform):
+        if platform == "android":
+            return "export/release/android/bin/*.apk"
+        return "export/release/ios/**"
 
     def generate_job(self, platform, runs_on):
-        commands = self.build_commands(platform)
-        steps = "\n".join(f"        run: {command}" for command in commands)
+        command = self.build_command(platform)
+        artifact_name = f"{self.app_title.replace(' ', '-')}-{platform}"
+        output_glob = self.output_glob(platform)
 
         return f"""  build-{platform}:
     name: Build {platform.capitalize()}
@@ -47,6 +48,14 @@ class YmlFileGenerator:
         with:
           haxe-version: 4.3.4
 
+      - name: Cache haxelib
+        uses: actions/cache@v4
+        with:
+          path: ~/.haxelib
+          key: haxelib-${{{{ runner.os }}}}-${{{{ hashFiles('project.xml', 'project.hxp', 'hmm.json') }}}}
+          restore-keys: |
+            haxelib-${{{{ runner.os }}}}-
+
       - name: Install dependencies
         run: |
           haxelib install lime --quiet
@@ -54,33 +63,46 @@ class YmlFileGenerator:
           haxelib run lime setup {platform} --quiet
 
       - name: Build {platform}
-{steps}
+        run: {command}
+
+      - name: Verify build output
+        run: |
+          if [ -z "$(find export/release/{platform} -type f 2>/dev/null)" ]; then
+            echo "Build failed: no output found in export/release/{platform}"
+            exit 1
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: {self.app_title.replace(" ", "-")}-{platform}
-          path: export/release/{platform}
+          name: {artifact_name}
+          path: {output_glob}
+          if-no-files-found: error
+          retention-days: 30
 """
 
     def generate(self):
         self.detect_project_type()
 
-        android_job = self.generate_job("android", "ubuntu-latest")
-        ios_job = self.generate_job("ios", "macos-latest")
+        android_job = self.generate_job("android", "ubuntu-22.04")
+        ios_job = self.generate_job("ios", "macos-14")
 
-        content = f"""name: Build {self.app_title}
+        return f"""name: Build {self.app_title}
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: ${{{{ github.workflow }}}}-${{{{ github.ref }}}}
+  cancel-in-progress: true
 
 jobs:
 {android_job}
 {ios_job}"""
-
-        return content
 
     def write(self):
         content = self.generate()
