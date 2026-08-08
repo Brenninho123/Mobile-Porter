@@ -14,6 +14,7 @@ ROOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 IO_DIR = os.path.join(CURRENT_DIR, "porter", "io")
 IMAGES_DIR = os.path.join(CURRENT_DIR, "porter", "images")
 MENUS_DIR = os.path.join(CURRENT_DIR, "porter", "menus")
+MOBILE_DIR = os.path.join(CURRENT_DIR, "porter", "mobile")
 
 
 def is_running_under_wine():
@@ -58,6 +59,7 @@ Project = load_module("Project", os.path.join(ROOT_DIR, "Project.py"))
 ASTC = load_module("ASTC", os.path.join(IMAGES_DIR, "ASTC.py"))
 YmlFile = load_module("YmlFile", os.path.join(IO_DIR, "YmlFile.py"))
 Controls = load_module("Controls", os.path.join(IO_DIR, "Controls.py"))
+Battery = load_module("Battery", os.path.join(MOBILE_DIR, "Battery.py"))
 
 WINLATOR_SHORTCUT_PATH = os.path.join(ROOT_DIR, f"{Project.PACKAGE_NAME}.desktop")
 WINLATOR_EXE_CONTAINER_PATH = f"C:\\{Project.APP_TITLE}\\{Project.APP_TITLE}.exe"
@@ -84,8 +86,7 @@ def get_mobile_storage_dir():
         return os.path.join(os.path.expanduser("~"), "Documents", "mobileporter")
 
     if ON_WINLATOR:
-        exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-        return exe_dir
+        return os.path.dirname(os.path.abspath(sys.argv[0]))
 
     return os.path.join(os.path.expanduser("~"), ".mobileporter")
 
@@ -120,6 +121,7 @@ class MobilePorter:
     def __init__(self, source_path, output_path, platform_target, assets_dir,
                  convert_astc=True, generate_controls=True, generate_yml=True,
                  astcenc_path="astcenc", block_size="6x6", quality="-medium",
+                 colorspace="cs", max_workers=4, astc_retry=True,
                  logger=None):
         self.source_path = os.path.abspath(source_path)
         self.output_path = os.path.abspath(output_path)
@@ -131,6 +133,9 @@ class MobilePorter:
         self.astcenc_path = astcenc_path
         self.block_size = block_size
         self.quality = quality
+        self.colorspace = colorspace
+        self.max_workers = max_workers
+        self.astc_retry = astc_retry
         self.project_type = None
         self.logger = logger if logger else Logger()
 
@@ -178,7 +183,8 @@ class MobilePorter:
 
         try:
             converter = ASTC.ASTCConverter(
-                output_assets, output_assets, self.block_size, self.quality, self.astcenc_path
+                output_assets, output_assets, self.block_size, self.quality, self.astcenc_path,
+                colorspace=self.colorspace, max_workers=self.max_workers, retry_once=self.astc_retry,
             )
             converter.run()
             self.logger.step("ASTC conversion", True)
@@ -451,6 +457,11 @@ def run_startup_checks():
 
     checks.append(("Platform detected", True, get_current_platform_name()))
 
+    battery_status = Battery.get_battery_status()
+    if battery_status is not None:
+        charging_label = "charging" if battery_status["charging"] else "not charging"
+        checks.append(("Battery", True, f"{battery_status['level']}% ({charging_label})"))
+
     for name, ok, detail in checks:
         status = "OK" if ok else "WARN"
         print(f"[{status}] {name}: {detail}")
@@ -471,6 +482,10 @@ def parse_args():
     parser.add_argument("--astcenc-path", default="astcenc", help="Path to the astcenc executable")
     parser.add_argument("--block-size", default="6x6", help="ASTC block size")
     parser.add_argument("--quality", default="-medium", help="astcenc quality preset")
+    parser.add_argument("--colorspace", default="cs", choices=["cs", "cl", "ch", "cH"],
+                         help="cs=sRGB color (default), cl=linear (normal maps/data textures)")
+    parser.add_argument("--max-workers", type=int, default=4, help="Max parallel ASTC conversions when battery allows")
+    parser.add_argument("--no-astc-retry", action="store_true", help="Do not retry failed ASTC conversions")
     parser.add_argument("--prepare-android", action="store_true", help="Detect or generate buildozer.spec and root main.py, then exit")
     parser.add_argument("--prepare-windows", action="store_true", help="Detect or generate mobileporter.spec for PyInstaller, then exit")
     parser.add_argument("--prepare-ios", action="store_true", help="Detect or generate build_ios.sh for kivy-ios, then exit")
@@ -504,6 +519,9 @@ def run_mobile_config(platform_name, default_platform_target):
             "convert_astc": True,
             "generate_controls": True,
             "generate_yml": True,
+            "colorspace": "cs",
+            "max_workers": 2,
+            "astc_retry": True,
         }
         with open(config_path, "w", encoding="utf-8") as file:
             json.dump(default_config, file, indent=4)
@@ -525,6 +543,9 @@ def run_mobile_config(platform_name, default_platform_target):
         convert_astc=config.get("convert_astc", True),
         generate_controls=config.get("generate_controls", True),
         generate_yml=config.get("generate_yml", True),
+        colorspace=config.get("colorspace", "cs"),
+        max_workers=config.get("max_workers", 2),
+        astc_retry=config.get("astc_retry", True),
         logger=logger,
     )
 
@@ -596,6 +617,9 @@ def main():
         astcenc_path=args.astcenc_path,
         block_size=args.block_size,
         quality=args.quality,
+        colorspace=args.colorspace,
+        max_workers=args.max_workers,
+        astc_retry=not args.no_astc_retry,
     )
 
     try:
