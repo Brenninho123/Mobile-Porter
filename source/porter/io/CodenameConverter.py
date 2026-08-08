@@ -1,6 +1,21 @@
 import argparse
+import importlib.util
 import os
 import sys
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+CODENAME_DIR = os.path.join(CURRENT_DIR, "codename")
+
+
+def load_module(module_name, file_path):
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+ProjectCodename = load_module("ProjectCodename", os.path.join(CODENAME_DIR, "ProjectCodename.py"))
+MainCodename = load_module("MainCodename", os.path.join(CODENAME_DIR, "MainCodename.py"))
 
 
 HITBOX_HX = """package mobileporter;
@@ -190,47 +205,98 @@ class StorageUtil
 
 
 class CodenameConverterGenerator:
-    def __init__(self, output_path, source_dir="source"):
+    def __init__(self, output_path, source_dir="source", main_hx_relative=None, patch_project=True, patch_main=True):
         self.output_path = os.path.abspath(output_path)
         self.source_dir = source_dir
         self.target_dir = os.path.join(self.output_path, self.source_dir, "mobileporter")
+        self.project_xml_path = os.path.join(self.output_path, "project.xml")
+        self.main_hx_relative = main_hx_relative or os.path.join(self.source_dir, "funkin", "backend", "system", "Main.hx")
+        self.main_hx_path = os.path.join(self.output_path, self.main_hx_relative)
+        self.patch_project = patch_project
+        self.patch_main = patch_main
+        self.results = []
 
     def validate_output(self):
         if not os.path.isdir(self.output_path):
             raise FileNotFoundError(f"CodenameEngine repository not found: {self.output_path}")
 
-        project_xml = os.path.join(self.output_path, "project.xml")
-        if not os.path.isfile(project_xml):
+        if not os.path.isfile(self.project_xml_path):
             print("Warning: project.xml not found — is this really a CodenameEngine checkout?")
 
     def write_file(self, file_name, content):
+        os.makedirs(self.target_dir, exist_ok=True)
         file_path = os.path.join(self.target_dir, file_name)
         with open(file_path, "w", encoding="utf-8") as file:
             file.write(content)
         print(f"Created {file_path}")
 
+    def run_hitbox_and_storage(self):
+        try:
+            self.write_file("Hitbox.hx", HITBOX_HX)
+            self.write_file("StorageUtil.hx", STORAGE_UTIL_HX)
+            self.results.append(("Hitbox.hx + StorageUtil.hx", True, ""))
+        except Exception as error:
+            self.results.append(("Hitbox.hx + StorageUtil.hx", False, str(error)))
+
+    def run_project_patch(self):
+        if not self.patch_project:
+            return
+
+        try:
+            converter = ProjectCodename.ProjectCodenameConverter(self.project_xml_path)
+            converter.patch()
+            self.results.append(("project.xml patch", True, ""))
+        except Exception as error:
+            self.results.append(("project.xml patch", False, str(error)))
+
+    def run_main_patch(self):
+        if not self.patch_main:
+            return
+
+        try:
+            converter = MainCodename.MainCodenameConverter(self.main_hx_path)
+            converter.patch()
+            self.results.append(("Main.hx patch", True, ""))
+        except Exception as error:
+            self.results.append(("Main.hx patch", False, str(error)))
+
     def run(self):
         self.validate_output()
-        os.makedirs(self.target_dir, exist_ok=True)
 
-        self.write_file("Hitbox.hx", HITBOX_HX)
-        self.write_file("StorageUtil.hx", STORAGE_UTIL_HX)
+        self.run_hitbox_and_storage()
+        self.run_project_patch()
+        self.run_main_patch()
 
-        print(f"CodenameEngine mobile files generated at {self.target_dir}")
-        print("Hitbox.hx exposes pressed()/justPressed()/justReleased() per direction — wire these into wherever CodenameEngine reads note input (likely PlayState or its Controls class).")
-        print("StorageUtil.hx wraps openfl.net.SharedObject — swap in wherever CodenameEngine currently reads/writes save data or settings directly to disk.")
+        print("\n" + "=" * 40)
+        print("Summary")
+        print("=" * 40)
+        for name, success, detail in self.results:
+            status = "OK" if success else "FAILED"
+            print(f"[{status}] {name}" + (f" — {detail}" if detail and not success else ""))
+
+        print(f"\nCodenameEngine mobile conversion done at {self.output_path}")
+        print("Reminder: Hitbox.hx still needs to be wired manually into PlayState.hx (or wherever note input is read).")
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Generate mobile compat files for a CodenameEngine checkout")
+    parser = argparse.ArgumentParser(description="Convert a CodenameEngine checkout for mobile")
     parser.add_argument("output", help="Path to the local CodenameEngine repository")
     parser.add_argument("--source-dir", default="source", help="Relative source folder inside the repository")
+    parser.add_argument("--main-hx", help="Relative path to Main.hx (default: source/funkin/backend/system/Main.hx)")
+    parser.add_argument("--no-project-patch", action="store_true", help="Skip patching project.xml")
+    parser.add_argument("--no-main-patch", action="store_true", help="Skip patching Main.hx")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    generator = CodenameConverterGenerator(args.output, args.source_dir)
+    generator = CodenameConverterGenerator(
+        args.output,
+        source_dir=args.source_dir,
+        main_hx_relative=args.main_hx,
+        patch_project=not args.no_project_patch,
+        patch_main=not args.no_main_patch,
+    )
 
     try:
         generator.run()
