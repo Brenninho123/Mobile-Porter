@@ -9,6 +9,7 @@ class YmlFileGenerator:
         self.output_path = os.path.abspath(output_path)
         self.app_title = app_title
         self.project_type = None
+        self.uses_hmm = False
 
     def detect_project_type(self):
         hxp_path = os.path.join(self.source_path, "project.hxp")
@@ -21,20 +22,42 @@ class YmlFileGenerator:
         else:
             raise FileNotFoundError("No project.hxp or project.xml found in source project")
 
+        self.uses_hmm = os.path.isfile(os.path.join(self.source_path, "hmm.json"))
+
     def build_command(self, platform):
         if self.project_type == "hxp":
             return f"haxe --run project.hxp build {platform}"
         return f"lime build {platform}"
+
+    def build_dependency_steps(self, platform):
+        if self.uses_hmm:
+            return [
+                "haxelib install hmm --quiet",
+                "haxelib run hmm install",
+            ]
+
+        return [
+            "haxelib install lime --quiet",
+            "haxelib install openfl --quiet",
+            f"haxelib run lime setup {platform} --quiet",
+        ]
 
     def output_glob(self, platform):
         if platform == "android":
             return "export/release/android/bin/*.apk"
         return "export/release/ios/**"
 
+    def cache_key_files(self):
+        if self.uses_hmm:
+            return "hmm.json"
+        return "project.xml', 'project.hxp"
+
     def generate_job(self, platform, runs_on):
         command = self.build_command(platform)
+        dependency_steps = "\n".join(f"          {step}" for step in self.build_dependency_steps(platform))
         artifact_name = f"{self.app_title.replace(' ', '-')}-{platform}"
         output_glob = self.output_glob(platform)
+        cache_key_files = self.cache_key_files()
 
         return f"""  build-{platform}:
     name: Build {platform.capitalize()}
@@ -52,15 +75,13 @@ class YmlFileGenerator:
         uses: actions/cache@v4
         with:
           path: ~/.haxelib
-          key: haxelib-${{{{ runner.os }}}}-${{{{ hashFiles('project.xml', 'project.hxp', 'hmm.json') }}}}
+          key: haxelib-${{{{ runner.os }}}}-${{{{ hashFiles('{cache_key_files}') }}}}
           restore-keys: |
             haxelib-${{{{ runner.os }}}}-
 
       - name: Install dependencies
         run: |
-          haxelib install lime --quiet
-          haxelib install openfl --quiet
-          haxelib run lime setup {platform} --quiet
+{dependency_steps}
 
       - name: Build {platform}
         run: {command}
@@ -111,7 +132,8 @@ jobs:
         with open(self.output_path, "w", encoding="utf-8") as file:
             file.write(content)
 
-        print(f"Generated {self.output_path} ({self.project_type} project)")
+        dep_mode = "hmm" if self.uses_hmm else "haxelib"
+        print(f"Generated {self.output_path} ({self.project_type} project, deps via {dep_mode})")
 
 
 def parse_args():
