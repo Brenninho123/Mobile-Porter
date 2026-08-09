@@ -1,30 +1,33 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 
 
 MODULE_HXC_TEMPLATE = """package;
 
-class Module extends funkin.modding.module.Module
-{
+import funkin.modding.module.Module;
+
+class {class_name} extends Module
+{{
 	public function new()
-	{
-		super("{mod_id}", "{mod_name}");
-	}
+	{{
+		super("{mod_id}", 0);
+	}}
 
-	override public function onCreate(event:funkin.modding.events.ScriptEvent):Void
-	{
-		super.onCreate(event);
-	}
-
-	override public function onUpdate(event:funkin.modding.events.UpdateScriptEvent):Void
-	{
-		super.onUpdate(event);
-	}
-}
+	override function onCreate():Void
+	{{
+		super.onCreate();
+	}}
+}}
 """
+
+
+def to_pascal_case(mod_id):
+    parts = re.split(r"[-_\s]+", mod_id.strip())
+    return "".join(part[:1].upper() + part[1:] for part in parts if part)
 
 
 class FunkinConverterGenerator:
@@ -37,6 +40,7 @@ class FunkinConverterGenerator:
         self.mod_homepage = mod_homepage
         self.api_version = api_version
         self.legacy_lua_path = os.path.abspath(legacy_lua_path) if legacy_lua_path else None
+        self.class_name = to_pascal_case(mod_id) or "MyMod"
 
         self.mods_dir = os.path.join(self.output_path, "mods")
         self.mod_dir = os.path.join(self.mods_dir, self.mod_id)
@@ -69,9 +73,9 @@ class FunkinConverterGenerator:
 
     def write_module_stub(self):
         os.makedirs(self.mod_dir, exist_ok=True)
-        module_path = os.path.join(self.mod_dir, "Module.hxc")
+        module_path = os.path.join(self.mod_dir, f"{self.class_name}.hxc")
 
-        content = MODULE_HXC_TEMPLATE.format(mod_id=self.mod_id, mod_name=self.mod_name)
+        content = MODULE_HXC_TEMPLATE.format(class_name=self.class_name, mod_id=self.mod_id)
 
         with open(module_path, "w", encoding="utf-8") as file:
             file.write(content)
@@ -118,8 +122,8 @@ class FunkinConverterGenerator:
         self.import_legacy_lua()
 
         print(f"\nV-Slice mod scaffold ready at {self.mod_dir}")
+        print(f"{self.class_name}.hxc extends Module with a confirmed onCreate() override — other real hooks exist too (e.g. onStateChangeEnd(event:StateChangeScriptEvent)), add them as needed.")
         print("Next steps: manually port each .TODO.lua script into a .hxc file extending the matching V-Slice class (Module, Song, NoteStyle, etc).")
-        print("Reference: https://funkincrew.github.io/funkin-modding-docs/ and https://github.com/crowplexus/Funkin-VSlice-Template")
 
 
 def parse_args():
