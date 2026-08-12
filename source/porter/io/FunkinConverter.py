@@ -32,7 +32,7 @@ def to_pascal_case(mod_id):
 
 class FunkinConverterGenerator:
     def __init__(self, output_path, mod_id, mod_name, mod_description="", mod_homepage="",
-                 api_version="1.0.0", legacy_lua_path=None):
+                 api_version="1.0.0", legacy_lua_path=None, force=False):
         self.output_path = os.path.abspath(output_path)
         self.mod_id = mod_id
         self.mod_name = mod_name
@@ -40,16 +40,23 @@ class FunkinConverterGenerator:
         self.mod_homepage = mod_homepage
         self.api_version = api_version
         self.legacy_lua_path = os.path.abspath(legacy_lua_path) if legacy_lua_path else None
+        self.force = force
         self.class_name = to_pascal_case(mod_id) or "MyMod"
 
         self.mods_dir = os.path.join(self.output_path, "mods")
         self.mod_dir = os.path.join(self.mods_dir, self.mod_id)
         self.assets_dir = os.path.join(self.mod_dir, "assets")
         self.scripts_dir = os.path.join(self.mod_dir, "scripts")
+        self.meta_path = os.path.join(self.mod_dir, "_polymod_meta.json")
+        self.module_path = os.path.join(self.mod_dir, f"{self.class_name}.hxc")
 
     def validate_output(self):
         if not os.path.isdir(self.output_path):
             raise FileNotFoundError(f"Funkin' checkout not found: {self.output_path}")
+
+        hmm_path = os.path.join(self.output_path, "hmm.json")
+        if not os.path.isfile(hmm_path):
+            print("Warning: hmm.json not found — is this really a FunkinCrew/Funkin checkout?")
 
     def build_meta_json(self):
         return {
@@ -63,30 +70,36 @@ class FunkinConverterGenerator:
         }
 
     def write_meta(self):
-        os.makedirs(self.mod_dir, exist_ok=True)
-        meta_path = os.path.join(self.mod_dir, "_polymod_meta.json")
+        if os.path.isfile(self.meta_path) and not self.force:
+            print(f"Skipped {self.meta_path} (already exists, use --force to overwrite)")
+            return
 
-        with open(meta_path, "w", encoding="utf-8") as file:
+        os.makedirs(self.mod_dir, exist_ok=True)
+
+        with open(self.meta_path, "w", encoding="utf-8") as file:
             json.dump(self.build_meta_json(), file, indent=4)
 
-        print(f"Created {meta_path}")
+        print(f"Created {self.meta_path}")
 
     def write_module_stub(self):
+        if os.path.isfile(self.module_path) and not self.force:
+            print(f"Skipped {self.module_path} (already exists, use --force to overwrite)")
+            return
+
         os.makedirs(self.mod_dir, exist_ok=True)
-        module_path = os.path.join(self.mod_dir, f"{self.class_name}.hxc")
 
         content = MODULE_HXC_TEMPLATE.format(class_name=self.class_name, mod_id=self.mod_id)
 
-        with open(module_path, "w", encoding="utf-8") as file:
+        with open(self.module_path, "w", encoding="utf-8") as file:
             file.write(content)
 
-        print(f"Created {module_path}")
+        print(f"Created {self.module_path}")
 
     def scaffold_folders(self):
         os.makedirs(self.assets_dir, exist_ok=True)
         os.makedirs(self.scripts_dir, exist_ok=True)
-        print(f"Created {self.assets_dir}")
-        print(f"Created {self.scripts_dir}")
+        print(f"Ensured {self.assets_dir}")
+        print(f"Ensured {self.scripts_dir}")
 
     def import_legacy_lua(self):
         if not self.legacy_lua_path:
@@ -97,6 +110,7 @@ class FunkinConverterGenerator:
             return
 
         imported_count = 0
+        skipped_count = 0
 
         for root, _, files in os.walk(self.legacy_lua_path):
             for file_name in files:
@@ -108,11 +122,17 @@ class FunkinConverterGenerator:
                 dest_name = os.path.splitext(relative_path)[0] + ".TODO.lua"
                 dest_path = os.path.join(self.scripts_dir, dest_name)
 
+                if os.path.isfile(dest_path) and not self.force:
+                    skipped_count += 1
+                    continue
+
                 os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 shutil.copyfile(source_path, dest_path)
                 imported_count += 1
 
         print(f"Imported {imported_count} Lua script(s) into {self.scripts_dir} (marked .TODO.lua, needs manual porting to .hxc)")
+        if skipped_count > 0:
+            print(f"Skipped {skipped_count} already-imported script(s) (use --force to reimport)")
 
     def run(self):
         self.validate_output()
@@ -135,6 +155,7 @@ def parse_args():
     parser.add_argument("--homepage", default="", help="Mod homepage/repo URL")
     parser.add_argument("--api-version", default="1.0.0", help="Polymod api_version to target")
     parser.add_argument("--legacy-lua", help="Path to a folder of existing .lua scripts to import as a starting point")
+    parser.add_argument("--force", action="store_true", help="Overwrite existing meta/module/imported scripts")
     return parser.parse_args()
 
 
@@ -144,7 +165,7 @@ def main():
 
     generator = FunkinConverterGenerator(
         args.output, args.mod_id, mod_name, args.description, args.homepage,
-        args.api_version, args.legacy_lua,
+        args.api_version, args.legacy_lua, force=args.force,
     )
 
     try:
