@@ -24,7 +24,6 @@ TOUCH_BUTTON_HX = """package mobileporter;
 
 import flixel.FlxSprite;
 import flixel.FlxG;
-import flixel.math.FlxPoint;
 import flixel.tweens.FlxTween;
 import lime.system.System;
 
@@ -42,7 +41,8 @@ class TouchButton extends FlxSprite
 	var opacityPressed:Float;
 	var vibrateOnPress:Bool;
 	var vibrateDurationMs:Int;
-	var dragOffset:FlxPoint;
+	var dragOffsetX:Float = 0;
+	var dragOffsetY:Float = 0;
 
 	public function new(x:Float, y:Float, size:Int, buttonID:String, opacityIdle:Float, opacityPressed:Float,
 		vibrateOnPress:Bool, vibrateDurationMs:Int, ?graphicPath:String)
@@ -53,7 +53,6 @@ class TouchButton extends FlxSprite
 		this.opacityPressed = opacityPressed;
 		this.vibrateOnPress = vibrateOnPress;
 		this.vibrateDurationMs = vibrateDurationMs;
-		this.dragOffset = FlxPoint.get();
 
 		if (graphicPath != null)
 			loadGraphic(graphicPath);
@@ -77,13 +76,18 @@ class TouchButton extends FlxSprite
 		updateTouchState();
 	}
 
+	function containsTouch(touch:flixel.input.touch.FlxTouch):Bool
+	{
+		return touch.x >= x && touch.x <= x + width && touch.y >= y && touch.y <= y + height;
+	}
+
 	function updateTouchState():Void
 	{
 		pressed = false;
 
 		for (touch in FlxG.touches.list)
 		{
-			if (overlapsPoint(FlxPoint.get(touch.x, touch.y)))
+			if (containsTouch(touch))
 			{
 				pressed = true;
 				activeTouchID = touch.touchPointID;
@@ -106,16 +110,17 @@ class TouchButton extends FlxSprite
 	{
 		for (touch in FlxG.touches.list)
 		{
-			if (touch.justPressed && overlapsPoint(FlxPoint.get(touch.x, touch.y)))
+			if (touch.justPressed && containsTouch(touch))
 			{
 				activeTouchID = touch.touchPointID;
-				dragOffset.set(x - touch.x, y - touch.y);
+				dragOffsetX = x - touch.x;
+				dragOffsetY = y - touch.y;
 			}
 
 			if (touch.touchPointID == activeTouchID && touch.pressed)
 			{
-				x = touch.x + dragOffset.x;
-				y = touch.y + dragOffset.y;
+				x = touch.x + dragOffsetX;
+				y = touch.y + dragOffsetY;
 			}
 
 			if (touch.touchPointID == activeTouchID && touch.justReleased)
